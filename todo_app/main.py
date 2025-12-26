@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, inspect
 from pydantic import BaseModel
 from typing import List, Optional
 import uuid
@@ -20,21 +20,23 @@ from fastapi.responses import FileResponse
 app.mount("/static", StaticFiles(directory="todo_app/static"), name="static")
 templates = Jinja2Templates(directory="todo_app/templates")
 
+from sqlalchemy import text, inspect
+
 @app.on_event("startup")
 async def startup_db_client():
-    # Simple migration to add owner_id if missing
-    with engine.connect() as conn:
-        try:
-            conn.execute(text("SELECT owner_id FROM tasks LIMIT 1"))
-        except Exception:
-            # Column likely missing
-            try:
-                # SQLite syntax
-                conn.execute(text("ALTER TABLE tasks ADD COLUMN owner_id VARCHAR"))
-                conn.commit() # Commit the DDL change
-                print("Migrated: Added owner_id column (SQLite)")
-            except Exception:
-                pass # Already exists or different DB handling
+    # Robust migration to add owner_id if missing
+    # utilizing inspector to avoid transaction aborts on Postgres
+    try:
+        inspector = inspect(engine)
+        columns = [col['name'] for col in inspector.get_columns("tasks")]
+        if "owner_id" not in columns:
+            print("Migration: owner_id missing, adding column...")
+            with engine.connect() as conn:
+                with conn.begin(): # Transaction
+                    conn.execute(text("ALTER TABLE tasks ADD COLUMN owner_id VARCHAR"))
+            print("Migration: Added owner_id column successfully.")
+    except Exception as e:
+        print(f"Migration check failed: {e}")
 
 @app.get("/sw.js")
 async def service_worker():
