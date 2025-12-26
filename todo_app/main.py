@@ -25,18 +25,21 @@ from sqlalchemy import text, inspect
 @app.on_event("startup")
 async def startup_db_client():
     # Robust migration to add owner_id if missing
-    # utilizing inspector to avoid transaction aborts on Postgres
-    try:
-        inspector = inspect(engine)
-        columns = [col['name'] for col in inspector.get_columns("tasks")]
-        if "owner_id" not in columns:
-            print("Migration: owner_id missing, adding column...")
-            with engine.connect() as conn:
-                with conn.begin(): # Transaction
-                    conn.execute(text("ALTER TABLE tasks ADD COLUMN owner_id VARCHAR"))
-            print("Migration: Added owner_id column successfully.")
-    except Exception as e:
-        print(f"Migration check failed: {e}")
+    with engine.connect() as conn:
+        with conn.begin():
+            if engine.dialect.name == "postgresql":
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS owner_id VARCHAR"))
+                print("Migrated: Added owner_id column (Postgres)")
+            else:
+                # SQLite fallback
+                try:
+                    conn.execute(text("SELECT owner_id FROM tasks LIMIT 1"))
+                except Exception:
+                    try:
+                        conn.execute(text("ALTER TABLE tasks ADD COLUMN owner_id VARCHAR"))
+                        print("Migrated: Added owner_id column (SQLite)")
+                    except Exception as e:
+                        print(f"SQLite migration failed (might exist): {e}")
 
 @app.get("/sw.js")
 async def service_worker():
