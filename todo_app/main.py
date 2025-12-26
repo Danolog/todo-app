@@ -25,21 +25,24 @@ from sqlalchemy import text, inspect
 @app.on_event("startup")
 async def startup_db_client():
     # Robust migration to add owner_id if missing
-    with engine.connect() as conn:
-        with conn.begin():
-            if engine.dialect.name == "postgresql":
-                conn.execute(text("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS owner_id VARCHAR"))
-                print("Migrated: Added owner_id column (Postgres)")
-            else:
-                # SQLite fallback
-                try:
-                    conn.execute(text("SELECT owner_id FROM tasks LIMIT 1"))
-                except Exception:
+    # We wrap this in a broad try-except to prevent worker crashes on race conditions
+    try:
+        with engine.connect() as conn:
+            with conn.begin():
+                if engine.dialect.name == "postgresql":
+                    # Use IF NOT EXISTS to avoid errors if column exists
+                    conn.execute(text("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS owner_id VARCHAR"))
+                    print("Migrated: Added owner_id column (Postgres)")
+                else:
+                    # SQLite fallback
                     try:
+                        conn.execute(text("SELECT owner_id FROM tasks LIMIT 1"))
+                    except Exception:
                         conn.execute(text("ALTER TABLE tasks ADD COLUMN owner_id VARCHAR"))
                         print("Migrated: Added owner_id column (SQLite)")
-                    except Exception as e:
-                        print(f"SQLite migration failed (might exist): {e}")
+    except Exception as e:
+        # Log error but don't crash the app. Retrieve might work if another worker succeeded.
+        print(f"Migration step skipped/failed (harmless if done by other worker): {e}")
 
 @app.get("/sw.js")
 async def service_worker():
